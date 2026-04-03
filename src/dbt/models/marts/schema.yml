@@ -1,0 +1,82 @@
+version: 2
+
+models:
+  - name: stock_daily_metrics
+    description: "Daily stock metrics with moving averages, volatility and momentum"
+    columns:
+      - name: trade_date
+        description: "Trading date"
+        tests: [not_null]
+      - name: symbol
+        description: "Stock ticker symbol"
+        tests: [not_null]
+      - name: close_price
+        description: "Closing price"
+        tests: [not_null]
+      - name: open_price
+        description: "Opening price"
+        tests: [not_null]
+      - name: high_price
+        description: "Daily high price"
+        tests: [not_null]
+      - name: low_price
+        description: "Daily low price"
+        tests: [not_null]
+      - name: daily_return_pct
+        description: "Daily return percentage"
+        tests: [not_null]
+      - name: is_positive_day
+        description: "True if close price > open price"
+        tests: [not_null]
+      - name: sma_5
+        description: "5-day simple moving average from Spark"
+      - name: sma_20
+        description: "20-day simple moving average from Spark"
+      - name: sma_50
+        description: "50-day simple moving average computed by dbt"
+      - name: volatility_20d
+        description: "20-day rolling price volatility"
+      - name: volume_ratio
+        description: "Volume vs 10-day average"
+
+  - name: stock_realtime_summary
+    description: "Hourly summary of realtime windowed metrics per symbol"
+    columns:
+      - name: trade_date
+        description: "Trading date"
+        tests: [not_null]
+      - name: trade_hour
+        description: "Hour of trading 0-23"
+        tests: [not_null]
+      - name: symbol
+        description: "Stock ticker symbol"
+        tests: [not_null]
+      - name: ma_15m
+        description: "15-minute moving average"
+      - name: ma_1h
+        description: "1-hour moving average"
+      - name: volatility_15m
+        description: "15-minute price volatility"
+      - name: volatility_1h
+        description: "1-hour price volatility"
+      - name: trend_signal
+        description: "BULLISH BEARISH or NEUTRAL based on 15m vs 1h MA"
+
+  - name: stock_performance
+    description: "Combined daily and realtime performance with buy/sell signals"
+    columns:
+      - name: symbol
+        description: "Stock ticker symbol"
+        tests: [not_null]
+      - name: trade_date
+        description: "Trading date"
+        tests: [not_null]
+      - name: close_price
+        description: "Latest closing price"
+        tests: [not_null]
+      - name: sma_signal
+        description: "SMA crossover signal"
+      - name: price_signal
+        description: "Price vs SMA signal"
+      - name: overall_signal
+        description: "Combined buy/sell recommendation"

@@ -1,0 +1,19 @@
+name: 'stock_market_dbt'
+version: '1.0.0'
+config-version: 2
+
+profile: 'stock_market'
+
+model-paths: ["models"]
+test-paths:  ["tests"]
+macro-paths: ["macros"]
+
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  stock_market_dbt:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

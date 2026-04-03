@@ -1,0 +1,85 @@
+version: 2
+
+sources:
+  # ── Batch Database ─────────────────────────────────────────────
+  - name: batch
+    database: STOCKMARKETBATCH
+    schema: PUBLIC
+    description: "Historical OHLCV stock data from batch pipeline"
+
+    tables:
+      - name: HISTORICAL_STOCK
+        description: "Daily OHLCV historical stock data loaded by Spark batch"
+        columns:
+          - name: DATE
+            description: "Trading date"
+            tests: [not_null]
+          - name: SYMBOL
+            description: "Stock ticker symbol"
+            tests: [not_null]
+          - name: OPEN_PRICE
+            description: "Opening price"
+            tests: [not_null]
+          - name: HIGH_PRICE
+            description: "Daily high price"
+            tests: [not_null]
+          - name: LOW_PRICE
+            description: "Daily low price"
+            tests: [not_null]
+          - name: CLOSE_PRICE
+            description: "Closing price"
+            tests: [not_null]
+          - name: VOLUME
+            description: "Trading volume"
+            tests: [not_null]
+          - name: DAILY_RANGE
+            description: "High minus low"
+          - name: DAILY_RETURN_PCT
+            description: "Daily return percentage"
+          - name: IS_POSITIVE_DAY
+            description: "True if close > open"
+          - name: SMA_5
+            description: "5-day moving average"
+          - name: SMA_20
+            description: "20-day moving average"
+          - name: BATCH_DATE
+            description: "Date this batch was processed"
+          - name: LAST_UPDATED
+            description: "Timestamp of last update"
+
+  # ── Stream Database ────────────────────────────────────────────
+  - name: stream
+    database: STOCKMARKETSTREAM
+    schema: PUBLIC
+    description: "Realtime windowed analytics from streaming pipeline"
+
+    tables:
+      - name: REALTIME_STOCK
+        description: "Spark-computed windowed metrics from realtime stream"
+        columns:
+          - name: SYMBOL
+            description: "Stock ticker symbol"
+            tests: [not_null]
+          - name: WINDOW_START
+            description: "Window start timestamp"
+            tests: [not_null]
+          - name: WINDOW_15M_END
+            description: "15-minute window end timestamp"
+          - name: WINDOW_1H_END
+            description: "1-hour window end timestamp"
+          - name: MA_15M
+            description: "15-minute moving average"
+          - name: MA_1H
+            description: "1-hour moving average"
+          - name: VOLATILITY_15M
+            description: "15-minute price volatility"
+          - name: VOLATILITY_1H
+            description: "1-hour price volatility"
+          - name: VOLUME_SUM_15M
+            description: "Total volume in 15-minute window"
+          - name: VOLUME_SUM_1H
+            description: "Total volume in 1-hour window"
+          - name: BATCH_ID
+            description: "Batch identifier"
+          - name: INGESTION_TIME
+            description: "Time data was ingested"
