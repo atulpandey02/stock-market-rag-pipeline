@@ -1,6 +1,13 @@
 """
 Stock Market Streaming Analytics Pipeline
-All dates use UTC throughout — matches consumer file paths and Airflow {{ ds }}.
+All dates use actual UTC wall-clock time throughout — matches producer/consumer file paths.
+
+WHY NOT context['ds']?
+  Airflow's ds is the *logical* execution date, which is always 1 day behind the
+  actual run date (e.g. DAG triggered on Apr 4 has ds="2026-04-03").
+  The producer and consumer write files keyed to the real UTC wall-clock date (Apr 4),
+  so using ds would always point Spark and the summary at yesterday's (empty) partition.
+  Solution: use datetime.now(timezone.utc) everywhere — same as the MinIODataSensor.
 """
 
 import os
@@ -14,15 +21,32 @@ from airflow.sensors.base import BaseSensorOperator
 from airflow.utils.decorators import apply_defaults
 
 
+# ── Shared UTC date helper ────────────────────────────────────────────────────
+
+def get_utc_date_parts():
+    """
+    Returns (utc_date_str, year, month, day) based on actual UTC wall-clock time.
+    Use this everywhere instead of context['ds'] so all tasks point at the same
+    partition that the producer/consumer wrote today.
+    """
+    now   = datetime.now(timezone.utc)
+    year  = str(now.year)
+    month = f"{now.month:02d}"
+    day   = f"{now.day:02d}"
+    return f"{year}-{month}-{day}", year, month, day
+
+
 def get_minio_client():
     from minio import Minio
     return Minio('minio:9000', access_key='minioadmin', secret_key='minioadmin', secure=False)
 
 
+# ── Sensor ────────────────────────────────────────────────────────────────────
+
 class MinIODataSensor(BaseSensorOperator):
     """
-    Waits until MinIO has at least min_files in the Airflow execution date partition.
-    Uses context['ds'] (UTC) — matches consumer which writes using UTC.
+    Waits until MinIO has at least min_files in today's UTC date partition.
+    Uses datetime.now(timezone.utc) — matches producer/consumer file paths.
     """
 
     @apply_defaults
@@ -36,16 +60,9 @@ class MinIODataSensor(BaseSensorOperator):
         try:
             client = get_minio_client()
 
-            # ✅ Use Airflow execution date (UTC) — matches consumer UTC file paths
-            ds             = context['ds']          # e.g. "2026-03-29"
-            year, month, day = ds.split("-")
-
-            path = (
-                f"{self.prefix}/"
-                f"year={year}/month={month}/day={day}"
-            )
-
-            self.log.info(f"Checking path: {path} (Airflow ds={ds} UTC)")
+            _, year, month, day = get_utc_date_parts()
+            path = f"{self.prefix}/year={year}/month={month}/day={day}"
+            self.log.info(f"Checking MinIO path: {path} (actual UTC today)")
 
             objects    = list(client.list_objects(self.bucket_name, prefix=path, recursive=True))
             data_files = [o for o in objects if o.size > 0]
@@ -99,9 +116,8 @@ def collect_streaming_data(**context):
     import time
 
     scripts_path = "/opt/airflow/dags/scripts"
-    timeout_secs = 300  # 5 minutes — enough for portfolio demo
+    timeout_secs = 300  # 5 minutes
 
-    # Verify scripts exist
     for script in ["stream_data_producer.py", "realtime_data_consumer.py"]:
         path = f"{scripts_path}/{script}"
         if not os.path.exists(path):
@@ -112,22 +128,16 @@ def collect_streaming_data(**context):
 
     producer = subprocess.Popen(
         [sys.executable, f"{scripts_path}/stream_data_producer.py"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     consumer = subprocess.Popen(
         [sys.executable, f"{scripts_path}/realtime_data_consumer.py"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
 
     print(f"Producer PID: {producer.pid}")
     print(f"Consumer PID: {consumer.pid}")
 
-    # Check they didn't crash immediately
-    import time
     time.sleep(10)
     if producer.poll() is not None:
         _, stderr = producer.communicate()
@@ -139,7 +149,6 @@ def collect_streaming_data(**context):
     print("Both processes running cleanly — waiting for remaining time...")
     time.sleep(timeout_secs - 10)
 
-    # Stop both cleanly
     for proc, name in [(producer, "Producer"), (consumer, "Consumer")]:
         try:
             proc.terminate()
@@ -155,10 +164,11 @@ def collect_streaming_data(**context):
 def run_spark_processing(**context):
     """
     Run spark_stream_batch_processor.py via docker exec.
-    Passes {{ ds }} (UTC) so Spark reads the correct date partition.
+    Passes actual UTC wall-clock date so Spark reads the correct partition written today.
     """
-    ds = context['ds']  # UTC date e.g. "2026-03-29"
-    print(f"Running Spark processor for UTC date: {ds}")
+    # ✅ Use actual UTC wall-clock date — matches consumer file paths
+    utc_date, _, _, _ = get_utc_date_parts()
+    print(f"Running Spark processor for UTC date: {utc_date}")
 
     cmd = [
         "docker", "exec",
@@ -172,7 +182,7 @@ def run_spark_processing(**context):
         "--packages",
         "org.apache.hadoop:hadoop-aws:3.3.1,com.amazonaws:aws-java-sdk-bundle:1.11.901",
         "/opt/spark/jobs/spark_stream_batch_processor.py",
-        ds   # ✅ pass UTC date — matches consumer file paths
+        utc_date,   # ✅ actual UTC today — same partition consumer wrote to
     ]
 
     print(f"Command: {' '.join(cmd)}")
@@ -202,8 +212,8 @@ def load_to_snowflake(**context):
 
 def pipeline_summary(**context):
     """Print summary of what was processed."""
-    ds             = context['ds']
-    year, month, day = ds.split("-")
+    # ✅ Use actual UTC wall-clock date — same partition all other tasks used
+    utc_date, year, month, day = get_utc_date_parts()
 
     client = get_minio_client()
     bucket = "stock-market-data"
@@ -228,10 +238,10 @@ def pipeline_summary(**context):
     print("=" * 55)
     print("  PIPELINE EXECUTION SUMMARY")
     print("=" * 55)
-    print(f"  Airflow Date (UTC) : {ds}")
-    print(f"  Raw CSV files      : {len(raw_files)}")
-    print(f"  Processed parquet  : {len(proc_parquet)}")
-    print(f"  Symbols processed  : {sorted(symbol_folders)}")
+    print(f"  UTC Date (wall-clock) : {utc_date}")
+    print(f"  Raw CSV files         : {len(raw_files)}")
+    print(f"  Processed parquet     : {len(proc_parquet)}")
+    print(f"  Symbols processed     : {sorted(symbol_folders)}")
     print("=" * 55)
     if raw_files and proc_parquet:
         print("  ✅ Pipeline completed successfully")
@@ -241,7 +251,7 @@ def pipeline_summary(**context):
 
 
 def final_cleanup(**context):
-    """Final cleanup."""
+    """Final cleanup — kill any lingering producer/consumer processes."""
     try:
         import psutil
         for proc in psutil.process_iter(['pid', 'cmdline']):
@@ -271,7 +281,7 @@ default_args = {
 with DAG(
     dag_id="stock_streaming_pipeline",
     default_args=default_args,
-    description="Stock Market Streaming Analytics Pipeline (UTC)",
+    description="Stock Market Streaming Analytics Pipeline (UTC wall-clock)",
     schedule_interval=timedelta(days=1),
     start_date=datetime(2025, 9, 15),
     catchup=False,

@@ -1,34 +1,44 @@
 """
 Stock Market Batch Pipeline DAG
-fetch → consume → spark → snowflake → complete
+=================================
+Runs INSIDE Docker (Airflow worker):
+  1. fetch_historical_data          Finnhub API → Kafka
+  2. consume_historical_data        Kafka → MinIO raw/historical/
+  3. wait_for_raw_data              MinIO sensor (actual UTC date)
+  4. process_data                   Spark → MinIO processed/historical/
+  5. load_historical_to_snowflake   MinIO → Snowflake MERGE
+  6. pipeline_complete              Summary log
 
-Schedule: Daily
-All dates use UTC {{ ds }} to ensure consistency across pipeline.
+Runs MANUALLY on Mac terminal after DAG completes:
+  dbt run / dbt test                src/dbt/
+  python rag_pipeline.py            src/rag/
+  streamlit run app.py              src/rag/
+
+Schedule: 9AM weekdays (Mon-Fri)
 """
 
 import os
-from datetime import datetime, timedelta
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
 
 from airflow import DAG
-from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 from airflow.sensors.base import BaseSensorOperator
 from airflow.utils.decorators import apply_defaults
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def get_minio_client():
-    from minio import Minio
-    return Minio(
-        'minio:9000',
-        access_key='minioadmin',
-        secret_key='minioadmin',
-        secure=False
-    )
-
+# ── MinIO Sensor ──────────────────────────────────────────────────────────────
 
 class MinIODataSensor(BaseSensorOperator):
-    """Waits for files in MinIO under a given prefix + date partition."""
+    """
+    Waits until MinIO has at least `min_files` in today's partition.
+
+    ✅ Uses datetime.now(UTC) — NOT context['ds']
+    Reason: consumer writes files using actual UTC time.
+            context['ds'] is the logical schedule date which
+            lags behind when you manually trigger the DAG.
+    """
 
     @apply_defaults
     def __init__(self, bucket_name, prefix, min_files=1, *args, **kwargs):
@@ -39,21 +49,171 @@ class MinIODataSensor(BaseSensorOperator):
 
     def poke(self, context):
         try:
-            client           = get_minio_client()
-            ds               = context['ds']
-            year, month, day = ds.split("-")
-            path             = (
+            from minio import Minio
+            from datetime import datetime, timezone
+
+            client = Minio(
+                'minio:9000',
+                access_key='minioadmin',
+                secret_key='minioadmin',
+                secure=False
+            )
+
+            # ✅ Use actual UTC today — matches consumer file paths
+            now   = datetime.now(timezone.utc)
+            year  = str(now.year)
+            month = f"{now.month:02d}"
+            day   = f"{now.day:02d}"
+
+            path = (
                 f"{self.prefix}/"
                 f"year={year}/month={month}/day={day}"
             )
-            self.log.info(f"Checking: {path}")
+
+            self.log.info(f"Checking MinIO path: {path} (actual UTC today)")
+
             objects    = list(client.list_objects(self.bucket_name, prefix=path, recursive=True))
             data_files = [o for o in objects if o.size > 0]
-            self.log.info(f"Found {len(data_files)} files")
+
+            self.log.info(f"Found {len(data_files)} files (need {self.min_files}) in {path}")
             return len(data_files) >= self.min_files
+
         except Exception as e:
-            self.log.error(f"Sensor error: {e}")
+            self.log.error(f"MinIO sensor error: {e}")
             return False
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+SCRIPTS = "/opt/airflow/dags/scripts"
+
+
+def run_script(script_name: str, *args):
+    """Run a Python script from the scripts folder, raise on failure."""
+    cmd    = [sys.executable, f"{SCRIPTS}/{script_name}"] + list(args)
+    result = subprocess.run(cmd, capture_output=False)
+    if result.returncode != 0:
+        raise Exception(f"{script_name} failed with exit code {result.returncode}")
+
+
+# ── Task 1: Fetch Historical Data ─────────────────────────────────────────────
+
+def fetch_historical_data(**context):
+    """
+    Fetch OHLCV data for 10 stocks from Finnhub API.
+    Produces each row as a Kafka message → stock-market-batch topic.
+    Stocks: AAPL, MSFT, GOOGL, AMZN, META, TSLA, NVDA, INTC, JPM, V
+    """
+    print("=" * 55)
+    print("  TASK 1: Fetching historical data from Finnhub")
+    print("=" * 55)
+    run_script("batch_data_producer.py")
+    print("✓ Historical data produced to Kafka")
+
+
+# ── Task 2: Consume Historical Data ──────────────────────────────────────────
+
+def consume_historical_data(**context):
+    """
+    Consume messages from Kafka stock-market-batch topic.
+    Writes CSV files to MinIO: raw/historical/year=/month=/day=/
+    Exits automatically when Kafka topic is drained.
+    """
+    print("=" * 55)
+    print("  TASK 2: Consuming Kafka → MinIO")
+    print("=" * 55)
+    run_script("batch_data_consumer.py")
+    print("✓ Data written to MinIO raw/historical/")
+
+
+# ── Task 4: Spark Batch Processing ───────────────────────────────────────────
+
+def process_data(**context):
+    """
+    Run Spark batch processor via docker exec on spark-client container.
+    Reads all CSVs from raw/historical/ recursively.
+    Computes: SMA-5, SMA-20, daily_return_pct, daily_range, is_positive_day.
+    Writes parquet to: processed/historical/year=/month=/day=/symbol=/
+    """
+    print("=" * 55)
+    print("  TASK 4: Running Spark batch processor")
+    print("=" * 55)
+
+    cmd = [
+        "docker", "exec",
+        "stockmarketdatapipeline-spark-client-1",
+        "/opt/spark/bin/spark-submit",
+        "--master",          "spark://spark-master:7077",
+        "--conf",            "spark.jars.ivy=/tmp/.ivy2",
+        "--driver-memory",   "1g",
+        "--executor-memory", "1g",
+        "--executor-cores",  "1",
+        "--packages",
+        "org.apache.hadoop:hadoop-aws:3.3.1,com.amazonaws:aws-java-sdk-bundle:1.11.901",
+        "/opt/spark/jobs/spark_batch_processor.py",
+    ]
+
+    print(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=False)
+
+    if result.returncode == 0:
+        print("✓ Spark batch processing complete")
+    else:
+        raise Exception(f"Spark failed with exit code: {result.returncode}")
+
+
+# ── Task 5: Load to Snowflake ─────────────────────────────────────────────────
+
+def load_historical_to_snowflake(**context):
+    """
+    Read processed parquet from MinIO and MERGE into Snowflake.
+    Uses MERGE (not INSERT) — DAG reruns are idempotent.
+    Primary key: (symbol, date)
+    Target: STOCKMARKETBATCH.PUBLIC.HISTORICAL_STOCK
+    """
+    print("=" * 55)
+    print("  TASK 5: Loading to Snowflake")
+    print("=" * 55)
+
+    # Use actual UTC today — matches where Spark wrote the parquet files
+    now   = datetime.now(timezone.utc)
+    ds    = now.strftime("%Y-%m-%d")
+    print(f"  Loading date: {ds}")
+
+    run_script("load_to_snowflake.py", ds)
+    print("✓ Snowflake MERGE complete")
+
+
+# ── Task 6: Pipeline Complete ─────────────────────────────────────────────────
+
+def pipeline_complete(**context):
+    """
+    Print a summary and remind what to run manually on Mac terminal next.
+    dbt and RAG are NOT in this DAG because they are not installed
+    inside the Airflow Docker container.
+    """
+    now = datetime.now(timezone.utc)
+    print("=" * 55)
+    print("  AIRFLOW PIPELINE COMPLETE ✅")
+    print("=" * 55)
+    print(f"  Date: {now.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    print()
+    print("  Tasks completed inside Docker:")
+    print("    ✅ fetch_historical_data")
+    print("    ✅ consume_historical_data")
+    print("    ✅ wait_for_raw_data (sensor)")
+    print("    ✅ process_data (Spark)")
+    print("    ✅ load_historical_to_snowflake")
+    print()
+    print("  Now run these on your Mac terminal:")
+    print("    cd src/dbt")
+    print("    dbt run --profiles-dir . --project-dir .")
+    print("    dbt test --profiles-dir . --project-dir .")
+    print()
+    print("    cd src/rag")
+    print("    python rag_pipeline.py")
+    print("    streamlit run app.py")
+    print("=" * 55)
 
 
 # ── DAG Definition ────────────────────────────────────────────────────────────
@@ -67,84 +227,62 @@ default_args = {
     "retry_delay":      timedelta(minutes=5),
 }
 
-dag = DAG(
-    dag_id           = "stock_market_batch_pipeline",
-    default_args     = default_args,
-    description      = "Stock Market Batch Pipeline: Alpha Vantage → Kafka → MinIO → Spark → Snowflake",
-    schedule_interval= timedelta(days=1),
-    start_date       = datetime(2026, 3, 27),
-    catchup          = False,
-    max_active_runs  = 1,
-    tags             = ['batch', 'historical', 'snowflake']
-)
+with DAG(
+    dag_id="stock_market_batch_pipeline",
+    default_args=default_args,
+    description="Finnhub → Kafka → MinIO → Spark → Snowflake",
+    schedule_interval="0 9 * * 1-5",   # 9AM Mon-Fri
+    start_date=datetime(2025, 9, 15),
+    catchup=False,
+    max_active_runs=1,
+    tags=["batch", "historical", "snowflake"],
+) as dag:
 
-# ── Task 1: Fetch Historical Data ─────────────────────────────────────────────
-# ✅ No {{ ds }} — producer handles its own date logic internally
-fetch_historical_data = BashOperator(
-    task_id      = "fetch_historical_data",
-    bash_command = "python /opt/airflow/dags/scripts/batch_data_producer.py",
-    execution_timeout = timedelta(minutes=30),  # 10 stocks × 5s delay = ~1 min + buffer
-    dag          = dag,
-)
+    t1_fetch = PythonOperator(
+        task_id="fetch_historical_data",
+        python_callable=fetch_historical_data,
+        execution_timeout=timedelta(minutes=30),
+    )
 
-# ── Task 2: Consume Historical Data ──────────────────────────────────────────
-# ✅ No {{ ds }} — consumer exits on 10 empty polls automatically
-consume_historical_data = BashOperator(
-    task_id      = "consume_historical_data",
-    bash_command = "python /opt/airflow/dags/scripts/batch_data_consumer.py",
-    execution_timeout = timedelta(minutes=10),
-    dag          = dag,
-)
+    t2_consume = PythonOperator(
+        task_id="consume_historical_data",
+        python_callable=consume_historical_data,
+        execution_timeout=timedelta(minutes=20),
+    )
 
-# ── Task 3: Wait for Raw Data in MinIO ───────────────────────────────────────
-wait_for_raw_data = MinIODataSensor(
-    task_id       = "wait_for_raw_data",
-    bucket_name   = "stock-market-data",
-    prefix        = "raw/historical",
-    min_files     = 10,   # 10 stocks minimum
-    poke_interval = 15,
-    timeout       = 300,
-    dag           = dag,
-)
+    # ✅ Sensor uses actual UTC today, not context['ds']
+    t3_sensor = MinIODataSensor(
+        task_id="wait_for_raw_data",
+        bucket_name="stock-market-data",
+        prefix="raw/historical",
+        min_files=10,
+        poke_interval=30,
+        timeout=600,
+    )
 
-# ── Task 4: Spark Processing ──────────────────────────────────────────────────
-# ✅ Pass {{ ds }} to Spark so output path matches Snowflake load path
-process_data = BashOperator(
-    task_id      = "process_data",
-    bash_command = """
-        docker exec stockmarketdatapipeline-spark-client-1 \
-            /opt/spark/bin/spark-submit \
-            --master spark://spark-master:7077 \
-            --conf spark.jars.ivy=/tmp/.ivy2 \
-            --packages org.apache.hadoop:hadoop-aws:3.3.1,com.amazonaws:aws-java-sdk-bundle:1.11.901 \
-            /opt/spark/jobs/spark_batch_processor.py {{ ds }}
-    """,
-    execution_timeout = timedelta(minutes=20),
-    dag          = dag,
-)
+    t4_spark = PythonOperator(
+        task_id="process_data",
+        python_callable=process_data,
+        execution_timeout=timedelta(minutes=20),
+    )
 
-# ── Task 5: Load to Snowflake ─────────────────────────────────────────────────
-# ✅ Pass {{ ds }} — Snowflake loader reads from processed/historical/year=../month=../day=../
-load_to_snowflake = BashOperator(
-    task_id      = "load_historical_to_snowflake",
-    bash_command = "python /opt/airflow/dags/scripts/load_to_snowflake.py {{ ds }}",
-    execution_timeout = timedelta(minutes=15),
-    dag          = dag,
-)
+    t5_snowflake = PythonOperator(
+        task_id="load_historical_to_snowflake",
+        python_callable=load_historical_to_snowflake,
+        execution_timeout=timedelta(minutes=15),
+    )
 
-# ── Task 6: Pipeline Complete ─────────────────────────────────────────────────
-process_complete = BashOperator(
-    task_id      = "process_complete",
-    bash_command = 'echo "=== Batch pipeline for {{ ds }} completed successfully ==="',
-    dag          = dag,  # ✅ FIX: was missing dag=dag
-)
+    t6_done = PythonOperator(
+        task_id="pipeline_complete",
+        python_callable=pipeline_complete,
+    )
 
-# ── Dependencies ──────────────────────────────────────────────────────────────
-(
-    fetch_historical_data
-    >> consume_historical_data
-    >> wait_for_raw_data       # ✅ NEW: sensor confirms data landed before Spark runs
-    >> process_data
-    >> load_to_snowflake
-    >> process_complete
-)
+    # ── Flow ──────────────────────────────────────────────────────────────────
+    (
+        t1_fetch
+        >> t2_consume
+        >> t3_sensor
+        >> t4_spark
+        >> t5_snowflake
+        >> t6_done
+    )

@@ -2,7 +2,7 @@
 54
 __consumer_offsets 13 0
 __consumer_offsets 46 0
-__consumer_offsets 9 9009
+__consumer_offsets 9 9907
 continuous-stock-market-realtime 0 0
 continuous-stock-data-producer 0 0
 __consumer_offsets 42 0
@@ -49,7 +49,7 @@ __consumer_offsets 22 3
 __consumer_offsets 18 0
 __consumer_offsets 31 3
 __consumer_offsets 27 0
-stock-market-batch 0 12010
+stock-market-batch 0 12910
 __consumer_offsets 39 0
 __consumer_offsets 6 0
 __consumer_offsets 35 0
