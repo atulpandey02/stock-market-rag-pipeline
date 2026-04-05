@@ -227,7 +227,7 @@ jobs:
             "src/kafka/consumer/batch_data_consumer.py"
             "src/kafka/consumer/realtime_data_consumer.py"
             "src/spark/jobs/spark_batch_processor.py"
-            "src/snowflake/load_to_snowflake.py"
+            "src/snowflake/scripts/load_to_snowflake.py"
             "src/dbt/dbt_project.yml"
             "src/rag/rag_pipeline.py"
             "src/airflow/dags/stock_market_batch_dag.py"
