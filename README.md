@@ -1,26 +1,55 @@
-# Real-Time Stock Market Intelligence Platform
+<div align="center">
 
-An end-to-end data engineering project combining real-time streaming, batch processing, AI-powered market intelligence, and an interactive multi-page dashboard.
+# Stock Market Intelligence Pipeline
+
+**A production-grade data engineering system that ingests, transforms, and analyses stock market data — then answers natural language questions about it using AI grounded in your own pipeline's output.**
+
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Kafka](https://img.shields.io/badge/Apache_Kafka-231F20?style=flat-square&logo=apache-kafka&logoColor=white)](https://kafka.apache.org)
+[![Spark](https://img.shields.io/badge/Apache_Spark-E25A1C?style=flat-square&logo=apache-spark&logoColor=white)](https://spark.apache.org)
+[![Airflow](https://img.shields.io/badge/Apache_Airflow-017CEE?style=flat-square&logo=apache-airflow&logoColor=white)](https://airflow.apache.org)
+[![Snowflake](https://img.shields.io/badge/Snowflake-29B5E8?style=flat-square&logo=snowflake&logoColor=white)](https://snowflake.com)
+[![dbt](https://img.shields.io/badge/dbt-FF694B?style=flat-square&logo=dbt&logoColor=white)](https://getdbt.com)
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docker.com)
+
+<br/>
+
+> *Tracks 10 major equities — AAPL · MSFT · GOOGL · AMZN · META · TSLA · NVDA · INTC · JPM · V*
+
+</div>
 
 ---
 
 ## Architecture
 
+![Architecture Diagram](docs/images/architecture.png)
+
+The system runs two parallel pipelines that converge at the intelligence layer:
+
+- **Batch pipeline** — fetches a full year of OHLCV history daily, processes it through Spark, loads into Snowflake, and runs dbt transformations to produce BUY/SELL signals
+- **Streaming pipeline** — generates real-time price ticks every 30 seconds, computes 3-minute and 5-minute windowed aggregations, loads into a separate Snowflake database
+- **Intelligence layer** — the RAG engine synthesises **both** quantitative pipeline signals from dbt **and** financial news from Pinecone to answer natural language questions — the answer is only as good as your pipeline
+
+---
+
+## What Makes This Different
+
+Most RAG projects pull from a static document store. This one is different — **the AI answers are grounded in data your pipeline computed**.
+
+When you ask *"Should I buy AAPL?"* the system:
+
+1. Queries the `STOCK_PERFORMANCE` dbt mart for the latest SMA crossover signal
+2. Retrieves the 5 most semantically relevant news chunks from Pinecone
+3. Feeds both into Groq Llama3 — if the quantitative signal conflicts with news sentiment, the model flags it explicitly
+
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     BATCH PIPELINE  (Daily 9AM)                     │
-│   Alpha Vantage → Kafka → MinIO → Spark → Snowflake → dbt → RAG    │
-└─────────────────────────────────────────────────────────────────────┘
+📊 Pipeline Data — AAPL · 🟢 BULLISH · from dbt STOCK_PERFORMANCE
+   Close: $255.92  |  SMA-5: $255.38  |  SMA-20: $251.74  |  Return: +0.68%
 
-┌─────────────────────────────────────────────────────────────────────┐
-│                   STREAMING PIPELINE  (Continuous)                  │
-│   Price Generator → Kafka → MinIO → Spark → Snowflake              │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────┐
-│                       INTELLIGENCE LAYER                            │
-│   Finnhub News → Pinecone → Groq Llama3.1 → Streamlit UI           │
-└─────────────────────────────────────────────────────────────────────┘
+"The pipeline signal is BULLISH with SMA-5 above SMA-20 — a classic
+bullish crossover. Recent news has mixed sentiment however, with analysts
+at Evercore maintaining a $330 price target but broader market concerns
+flagged by multiple sources. The conflicting signals warrant caution..."
 ```
 
 ---
@@ -29,409 +58,185 @@ An end-to-end data engineering project combining real-time streaming, batch proc
 
 | Layer | Technology |
 |---|---|
-| Ingestion | Apache Kafka (Confluent), Alpha Vantage API, Finnhub API |
-| Storage | MinIO (S3-compatible data lake) |
-| Processing | Apache Spark 3.5.1 |
-| Orchestration | Apache Airflow 2.9.3 |
-| Warehouse | Snowflake (2 databases) |
-| Transformation | dbt-snowflake |
-| Vector DB | Pinecone |
-| Embeddings | sentence-transformers/all-MiniLM-L6-v2 (local, free) |
-| LLM | Groq Llama3.1-8b-instant (free tier) |
-| UI | Streamlit (3-page app) |
-| Infrastructure | Docker Compose |
-| CI/CD | GitHub Actions |
+| Message broker | Apache Kafka — dual topics (batch + realtime) |
+| Data lake | MinIO — Hive-partitioned `year=/month=/day=/symbol=` |
+| Processing | Apache Spark 3.5.1 — batch transforms + windowed aggregations |
+| Warehouse | Snowflake — two databases, incremental MERGE loading |
+| Transformation | dbt — 5 models, 27 automated quality tests |
+| Orchestration | Apache Airflow 2.9.3 — custom MinIO sensors, retry logic |
+| Vector DB | Pinecone — 300+ embedded financial news chunks |
+| Embeddings | sentence-transformers/all-MiniLM-L6-v2 — 384-dim, free, local |
+| LLM | Groq Llama3-8b — grounded financial Q&A |
+| UI | Streamlit — RAG chat, pipeline dashboard, SQL explorer |
+| Infrastructure | Docker Compose — 9 containerised services |
+| CI/CD | GitHub Actions — syntax checks, unit tests, dbt validation |
 
 ---
 
-## Project Structure
+## Pipeline in Action
 
-```
-stockmarketdatapipeline/
-│
-├── docker-compose.yaml
-├── requirements.txt
-├── .env.example
-│
-├── src/
-│   ├── kafka/
-│   │   ├── producer/
-│   │   │   ├── batch_data_producer.py      # Alpha Vantage → Kafka
-│   │   │   └── stream_data_producer.py     # Fake prices → Kafka
-│   │   └── consumer/
-│   │       ├── batch_data_consumer.py      # Kafka → MinIO historical
-│   │       └── realtime_data_consumer.py   # Kafka → MinIO realtime
-│   │
-│   ├── spark/
-│   │   └── jobs/
-│   │       ├── spark_batch_processor.py         # SMA, returns, volatility
-│   │       ├── spark_stream_processor.py        # Always-on streaming
-│   │       └── spark_stream_batch_processor.py  # Windowed analytics
-│   │
-│   ├── snowflake/
-│   │   ├── load_to_snowflake.py            # Historical → Snowflake MERGE
-│   │   └── load_stream_to_snowflake.py     # Realtime → Snowflake MERGE
-│   │
-│   ├── dbt/
-│   │   ├── dbt_project.yml
-│   │   ├── profiles.yml
-│   │   ├── models/
-│   │   │   ├── staging/
-│   │   │   │   ├── sources.yml
-│   │   │   │   ├── stg_historical_stock.sql
-│   │   │   │   └── stg_realtime_stock.sql
-│   │   │   └── marts/
-│   │   │       ├── schema.yml
-│   │   │       ├── stock_daily_metrics.sql
-│   │   │       ├── stock_realtime_summary.sql
-│   │   │       └── stock_performance.sql
-│   │   └── tests/
-│   │       ├── assert_price_not_negative.sql
-│   │       ├── assert_no_future_dates.sql
-│   │       ├── assert_high_gte_low.sql
-│   │       └── assert_expected_symbols.sql
-│   │
-│   ├── rag/
-│   │   ├── app.py                          # Streamlit entry point
-│   │   ├── rag_pipeline.py                 # Finnhub → Pinecone → Groq
-│   │   └── pages/
-│   │       ├── 1_Market_Intelligence.py    # RAG chat interface
-│   │       ├── 2_Pipeline_Dashboard.py     # Real-time monitoring
-│   │       └── 3_SQL_Explorer.py           # Snowflake query tool
-│   │
-│   └── airflow/
-│       └── dags/
-│           ├── stock_market_batch_dag.py   # Daily batch orchestration
-│           └── stock_market_stream_dag.py  # Streaming orchestration
-│
-└── .github/
-    └── workflows/
-        └── ci.yml
-```
+### Airflow — All Tasks Green
+![Airflow DAG](docs/images/airflow_dag.png)
+
+### Streamlit — Market Intelligence Chat
+![Streamlit Chat](docs/images/streamlit_chat.png)
+
+### dbt — Models and Test Results
+![dbt Results](docs/images/dbt_results.png)
+
+### Snowflake — Historical Stock Data
+![Snowflake](docs/images/snowflake_data.png)
+
+### Pinecone — Vector Index
+![Pinecone](docs/images/pinecone_index.png)
 
 ---
 
 ## Data Flow
 
-### Batch Pipeline
+### Batch (runs daily at 9AM)
 ```
-Alpha Vantage API  →  10 stocks × 365 days OHLCV
-        ↓
-Kafka  (stock-market-batch topic)
-        ↓
-MinIO  raw/historical/year=/month=/day=/
-        ↓  Spark computes:
-           SMA-5, SMA-20, daily_return_pct,
-           daily_range, is_positive_day
-MinIO  processed/historical/ (parquet by symbol)
-        ↓  Incremental MERGE on (symbol, date)
-Snowflake  STOCKMARKETBATCH.PUBLIC.HISTORICAL_STOCK
-        ↓
-dbt staging views → mart tables
-  stock_daily_metrics    (SMA-50, volatility, volume ratio)
-  stock_realtime_summary (hourly aggregations, trend signal)
-  stock_performance      (BUY / SELL / HOLD signals)
-        ↓
-Finnhub News → chunk → embed → Pinecone (315+ vectors)
+Finnhub API  →  Kafka  →  MinIO raw/historical/
+             →  Spark (SMA-5, SMA-20, daily_return_pct, is_positive_day)
+             →  MinIO processed/historical/
+             →  Snowflake HISTORICAL_STOCK  (MERGE on symbol + date)
+             →  dbt run  → stg_historical_stock
+                         → stock_daily_metrics
+                         → stock_performance  ← BUY/SELL signals
+             →  dbt test → 27 checks pass or pipeline fails
 ```
 
-### Streaming Pipeline
+### Streaming (continuous)
 ```
-Price Generator  →  fake tick every 30 seconds
-        ↓
-Kafka  (stock-market-realtime topic)
-        ↓
-MinIO  raw/realtime/year=/month=/day=/
-        ↓  Spark windowed analytics:
-           3-min + 15-min moving averages
-           volatility per window
-Snowflake  STOCKMARKETSTREAM.PUBLIC.REALTIME_STOCK
+Price generator  →  Kafka  →  MinIO raw/realtime/
+                 →  Spark windowed aggregations (3-min, 5-min MA)
+                 →  Snowflake REALTIME_STOCK  (MERGE on symbol + window_start)
 ```
 
-### Intelligence Layer
+### Intelligence (on demand)
 ```
-User: "What is the outlook for Apple?"
-        ↓
-Embed question with all-MiniLM-L6-v2  (384-dim vector)
-        ↓
-Pinecone cosine similarity search  →  top 5 relevant chunks
-        ↓
-Groq Llama3.1-8b generates grounded answer
-        ↓
-Streamlit displays answer + source cards with scores
+User question
+  →  Snowflake STOCK_PERFORMANCE  (dbt BUY/SELL signal, SMA crossover)
+  →  Pinecone semantic search      (top 5 relevant news chunks)
+  →  Groq Llama3                   (synthesises both, flags conflicts)
+  →  Streamlit                     (answer + metrics card + sources)
 ```
 
 ---
 
 ## Snowflake Schema
 
-### STOCKMARKETBATCH.PUBLIC.HISTORICAL_STOCK
-| Column | Type | Description |
-|---|---|---|
-| symbol | STRING | Stock ticker (AAPL, MSFT...) |
-| date | DATE | Trading date |
-| open_price | FLOAT | Opening price |
-| high_price | FLOAT | Daily high |
-| low_price | FLOAT | Daily low |
-| close_price | FLOAT | Closing price |
-| volume | BIGINT | Trading volume |
-| daily_range | FLOAT | high - low (Spark) |
-| daily_return_pct | FLOAT | (close-open)/open × 100 (Spark) |
-| is_positive_day | BOOLEAN | close > open (Spark) |
-| sma_5 | FLOAT | 5-day moving average (Spark) |
-| sma_20 | FLOAT | 20-day moving average (Spark) |
-| batch_date | DATE | Date this batch was processed |
+**STOCKMARKETBATCH.PUBLIC.HISTORICAL_STOCK**
 
-### STOCKMARKETSTREAM.PUBLIC.REALTIME_STOCK
 | Column | Type | Description |
 |---|---|---|
 | symbol | STRING | Stock ticker |
-| window_start | TIMESTAMP | Window start time |
-| window_15m_end | TIMESTAMP | 15-min window end |
-| window_1h_end | TIMESTAMP | 1-hour window end |
-| ma_15m | FLOAT | 15-min moving average |
-| ma_1h | FLOAT | 1-hour moving average |
-| volatility_15m | FLOAT | Price stddev 15 min |
-| volatility_1h | FLOAT | Price stddev 1 hour |
-| volume_sum_15m | BIGINT | Volume in 15-min window |
-| volume_sum_1h | BIGINT | Volume in 1-hour window |
+| date | DATE | Trading date |
+| open_price / close_price | FLOAT | OHLC prices |
+| daily_return_pct | FLOAT | `(close - open) / open × 100` |
+| daily_range | FLOAT | `high - low` |
+| is_positive_day | BOOLEAN | `close > open` |
+| sma_5 / sma_20 | FLOAT | Moving averages |
+
+**STOCKMARKETSTREAM.PUBLIC.REALTIME_STOCK**
+
+| Column | Type | Description |
+|---|---|---|
+| symbol | STRING | Stock ticker |
+| window_start | TIMESTAMP | Window start |
+| ma_3m / ma_5m | FLOAT | Windowed moving averages |
+| volatility_3m / volatility_5m | FLOAT | Price std deviation |
+| volume_sum_3m / volume_sum_5m | BIGINT | Volume per window |
 
 ---
 
-## dbt Models
+## dbt Quality Gates
 
-```
-sources
-  batch.HISTORICAL_STOCK    → STOCKMARKETBATCH
-  stream.REALTIME_STOCK     → STOCKMARKETSTREAM
+27 tests run after every pipeline execution. Any failure stops the pipeline before bad data reaches consumers.
 
-staging (views — clean + type-cast only)
-  stg_historical_stock
-  stg_realtime_stock
-
-marts (tables — analytical layer)
-  stock_daily_metrics       SMA-50, volatility_20d, volume_ratio
-  stock_realtime_summary    Hourly OHLC + BULLISH/BEARISH/NEUTRAL
-  stock_performance         JOIN historical + realtime → BUY/SELL/HOLD
-```
-
-### dbt Test Results
-```
-dbt run  → PASS=5  WARN=0  ERROR=0  ✅
-dbt test → PASS=27 WARN=0  ERROR=0  ✅
-```
-
-Custom SQL tests:
-- `assert_price_not_negative` — no negative close prices
-- `assert_no_future_dates` — no future trade dates
-- `assert_high_gte_low` — high price always >= low price
-- `assert_expected_symbols` — only 10 tracked tickers
-
----
-
-## RAG Architecture
-
-```
-Why semantic search over keyword search:
-  "AAPL surging" and "Apple stock rising" get similar
-  384-dim vectors — keyword search (BM25) would miss this.
-
-Ingestion (daily via Airflow):
-  Finnhub /company-news → 150 articles × 10 stocks
-  chunk_text() → 500-char overlapping chunks → 179 docs
-  all-MiniLM-L6-v2 (local, free) → 315+ vectors in Pinecone
-
-Query (per user question in Streamlit):
-  question → embed → Pinecone cosine similarity → top 5 chunks
-  Groq Llama3.1-8b-instant generates grounded answer
-  Sources shown with similarity scores + sentiment badges
+```sql
+not_null           → symbol, date, close_price, volume
+accepted_values    → symbol in 10 tracked stocks only
+assert_high_gte_low        → high_price >= low_price always
+assert_price_not_negative  → close_price > 0 always
+assert_no_future_dates     → date <= current_date always
+assert_expected_symbols    → exactly 10 stocks, no drift
 ```
 
 ---
 
-## Airflow DAGs
+## Key Engineering Decisions
 
-### stock_market_batch_pipeline (Mon–Fri 9AM UTC)
-```
-fetch_historical_data
-  → consume_historical_data
-  → wait_for_raw_data      (MinIO sensor, min 10 files)
-  → process_data           (Spark, passes {{ ds }} date)
-  → load_historical_to_snowflake
-  → run_dbt_models
-  → run_dbt_tests
-  → run_rag_ingestion
-  → pipeline_complete
-```
+**Why MERGE instead of INSERT?**
+Idempotency — if Airflow retries a failed task, MERGE updates existing rows instead of creating duplicates. Critical for production pipelines.
 
-### stock_streaming_pipeline (Daily)
-```
-cleanup_processes
-  → collect_streaming_data  (5 min window)
-  → wait_for_raw_data       (MinIO sensor)
-  → spark_analytics_processing
-  → validate_analytics_data (MinIO sensor)
-  → load_to_snowflake
-  → pipeline_summary
-  → final_cleanup
-```
+**Why custom MinIO sensor instead of time-based wait?**
+A time-based sleep is fragile. The custom sensor polls every 30 seconds and only unblocks Spark when ≥10 files are confirmed present — preventing silent failures on empty partitions.
+
+**Why `datetime.now(UTC)` in the sensor instead of `context['ds']`?**
+Airflow's `ds` is the logical schedule date — when you manually trigger a DAG it lags behind the actual date. Files written by the consumer use real UTC time, so the sensor must match that.
+
+**Why sentence-transformers instead of OpenAI embeddings?**
+Free, runs locally, no API key, no rate limits. all-MiniLM-L6-v2 at 384 dimensions is fast on CPU and sufficient for financial news retrieval.
 
 ---
 
-## Streamlit App (3 pages)
+## Lessons Learned
 
-```
-streamlit run app.py
-
-Page 1 — Market Intelligence
-  RAG chat powered by Finnhub + Pinecone + Groq Llama3.1
-  Stock filter, quick questions, source cards with scores
-
-Page 2 — Pipeline Dashboard
-  Live KPI cards (row counts, latest date, dbt test status)
-  Buy/sell signals from dbt stock_performance mart
-  Realtime stream cards (15-min MA, 1-hour MA, trend)
-  Top gainers / top losers
-  4 live data quality checks against Snowflake
-  Auto-refresh every 30 seconds
-
-Page 3 — SQL Explorer
-  6 preset queries (golden cross, volatility rank, etc.)
-  Write custom SQL against STOCKMARKETBATCH or STOCKMARKETSTREAM
-  Download results as CSV
-```
+| Problem | Root Cause | Fix |
+|---|---|---|
+| Silent data loss in Snowflake | UTC/EST timezone mismatch — consumer wrote `day=29`, Spark read `day=28` | Standardised everything to explicit `datetime.now(timezone.utc)` |
+| MinIO sensor checking wrong date | `context['ds']` returns logical schedule date, not trigger date | Changed sensor to use `datetime.now(UTC)` directly |
+| Kafka consumer crashes on startup | `group.id=None` — env var missing from docker-compose | Added `KAFKA_GROUP_BATCH_ID` to `x-airflow-common` |
+| Spark `PATH_NOT_FOUND` | `recursiveFileLookup` treated single CSV as directory | Switched to glob pattern |
+| Streamlit credentials not found | `find_dotenv(usecwd=True)` starts from CWD not file location | Walk up from `Path(__file__)` instead |
 
 ---
 
 ## Getting Started
 
-### Prerequisites
-- Docker Desktop
-- Python 3.10+
-- Free API keys: Alpha Vantage, Finnhub, Pinecone, Groq
-
-### 1. Clone
 ```bash
-git clone https://github.com/atulpandey02/realtime-stock-intelligence.git
-cd realtime-stock-intelligence
-```
+# 1. Clone
+git clone https://github.com/atulpandey02/stock-market-data-pipeline.git
+cd stock-market-data-pipeline
 
-### 2. Configure environment
-```bash
+# 2. Configure
 cp .env.example .env
-# Edit .env with your API keys
-```
+# Edit .env with your Finnhub, Pinecone, Groq, Snowflake credentials
 
-### 3. Start infrastructure
-```bash
+# 3. Start infrastructure
 docker-compose up -d
-# Starts: Kafka, Zookeeper, MinIO, Spark, Airflow
-```
 
-### 4. Run batch pipeline
-```bash
-# Via Airflow UI at http://localhost:8080
-# Trigger: stock_market_batch_pipeline
-```
+# 4. Trigger batch pipeline
+# Airflow UI → http://localhost:8080
+# DAG: stock_market_batch_pipeline → ▶ Trigger
 
-### 5. Run streaming pipeline
-```bash
-# Terminal 1
-python src/kafka/producer/stream_data_producer.py
-# Terminal 2
-python src/kafka/consumer/realtime_data_consumer.py
-# Then trigger: stock_streaming_pipeline in Airflow
-```
-
-### 6. Run dbt
-```bash
+# 5. Run dbt (on Mac terminal)
 cd src/dbt
-dbt run   # creates 5 models
-dbt test  # runs 27 quality tests
-```
+dbt run --profiles-dir . --project-dir .
+dbt test --profiles-dir . --project-dir .
 
-### 7. Ingest news and launch UI
-```bash
+# 6. Launch intelligence layer
 cd src/rag
-python rag_pipeline.py          # ingest Finnhub news → Pinecone
-streamlit run app.py            # http://localhost:8501
+python rag_pipeline.py     # ingest news into Pinecone
+streamlit run app.py       # → http://localhost:8501
 ```
 
 ---
 
-## Environment Variables
+## Future Enhancements
 
-```bash
-# Kafka
-KAFKA_BOOTSTRAP_SERVER=localhost:29092
-KAFKA_TOPIC_BATCH=stock-market-batch
-KAFKA_TOPIC_REALTIME=stock-market-realtime
-KAFKA_GROUP_BATCH_ID=batch-consumer-group
-KAFKA_GROUP_REALTIME_ID=realtime-consumer-group
-
-# MinIO
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET=stock-market-data
-MINIO_ENDPOINT=minio:9000
-
-# Snowflake
-SNOWFLAKE_ACCOUNT=your_account
-SNOWFLAKE_USER=your_user
-SNOWFLAKE_PASSWORD=your_password
-SNOWFLAKE_DATABASE=STOCKMARKETBATCH
-SNOWFLAKE_STREAM_DATABASE=STOCKMARKETSTREAM
-SNOWFLAKE_WAREHOUSE=COMPUTE_WH
-SNOWFLAKE_ROLE=ACCOUNTADMIN
-
-# APIs
-ALPHA_VANTAGE_API_KEY=your_key   # alphavantage.co
-FINNHUB_API_KEY=your_key         # finnhub.io
-PINECONE_API_KEY=your_key        # app.pinecone.io
-PINECONE_INDEX_NAME=stock-market-rag
-GROQ_API_KEY=your_key            # console.groq.com
-```
+- **Snowpipe auto-ingestion** — replace Airflow trigger with Snowpipe watching MinIO via webhook for true event-driven loading
+- **Near-realtime dbt** — run dbt every 15 minutes on `REALTIME_STOCK` so RAG answers incorporate short-term momentum alongside daily trends
+- **Unified RAG context** — inject both `STOCK_PERFORMANCE` (daily SMA) and `REALTIME_STOCK` (3-min MA) into the prompt with explicit timestamp labelling
+- **Anomaly detection** — flag unusual price movements via Z-score alerts through Airflow
 
 ---
 
-## Tracked Stocks
-
-`AAPL` `MSFT` `GOOGL` `AMZN` `META` `TSLA` `NVDA` `INTC` `JPM` `V`
-
----
-
-## Key Design Decisions
-
-| Decision | Why |
-|---|---|
-| UTC everywhere | Airflow `{{ ds }}` uses UTC — mismatches caused silent data loss |
-| MERGE not INSERT | Idempotent loads — failed DAGs can safely reprocess |
-| Hive partitioning | Spark partition pruning — reads only the date needed |
-| Groq over HuggingFace | Free tier, reliable inference, 500 tokens/sec |
-| Semantic over keyword search | Finds "AAPL surging" when asked about "Apple rising" |
-| dbt + Spark hybrid | Spark for scale/streaming, dbt for SQL models and governance |
-
----
-
-## CI/CD
-
-GitHub Actions on every push:
-1. Lint (flake8, black, isort)
-2. Unit tests (pytest with mocked infrastructure)
-3. dbt compile validation
-4. Docker build
-5. Airflow DAG syntax check
-6. Integration tests (main branch only)
-
----
-
-## Author
+<div align="center">
 
 **Atul Kumar Pandey**
-GitHub: [@atulpandey02](https://github.com/atulpandey02)
 
----
+[GitHub](https://github.com/atulpandey02) · [LinkedIn](https://linkedin.com/in/atulkumarpandey)
 
-## License
-
-MIT License
+</div>
