@@ -378,6 +378,6 @@ streamlit run app.py       # opens dashboard at http://localhost:8501
 
 **Atul Kumar Pandey**
 
-[GitHub](https://github.com/atulpandey02) · [LinkedIn](https://linkedin.com/in/atulkumarpandey)
+[GitHub](https://github.com/atulpandey02) · [LinkedIn](https://www.linkedin.com/in/atulpandey02/)
 
 </div>
