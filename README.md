@@ -104,7 +104,7 @@ The system runs two parallel pipelines that converge at the intelligence layer:
   <table>
     <tr>
       <td align="center" width="50%">
-        <img src="docs/image/Lineage_Graph.png" width="100%" alt="dbt Lineage Graph"/>
+        <img src="docs/image/Lineage Graph.png" width="100%" alt="dbt Lineage Graph"/>
         <br/><sub><b>dbt — model lineage and 27 passing tests</b></sub>
       </td>
       <td align="center" width="50%">
