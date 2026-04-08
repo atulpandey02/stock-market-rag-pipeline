@@ -2,7 +2,7 @@
 54
 __consumer_offsets 13 0
 __consumer_offsets 46 0
-__consumer_offsets 9 11890
+__consumer_offsets 9 12881
 continuous-stock-market-realtime 0 0
 continuous-stock-data-producer 0 0
 __consumer_offsets 42 0
@@ -26,7 +26,7 @@ __consumer_offsets 29 3
 __consumer_offsets 25 0
 __consumer_offsets 8 3
 __consumer_offsets 37 0
-stock-market-realtime 0 3261
+stock-market-realtime 0 3341
 __consumer_offsets 4 0
 __consumer_offsets 33 0
 __consumer_offsets 15 0
@@ -35,7 +35,7 @@ __consumer_offsets 11 0
 __consumer_offsets 44 0
 __consumer_offsets 23 0
 __consumer_offsets 19 0
-__consumer_offsets 32 204
+__consumer_offsets 32 210
 __consumer_offsets 28 0
 __consumer_offsets 7 0
 __consumer_offsets 40 0
@@ -49,7 +49,7 @@ __consumer_offsets 22 3
 __consumer_offsets 18 0
 __consumer_offsets 31 3
 __consumer_offsets 27 0
-stock-market-batch 0 14910
+stock-market-batch 0 15910
 __consumer_offsets 39 0
 __consumer_offsets 6 0
 __consumer_offsets 35 0
