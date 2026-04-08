@@ -4,7 +4,7 @@
 
 **A production-grade data engineering system that ingests, transforms, and analyses stock market data — then answers natural language questions about it using AI grounded in your own pipeline's output.**
 
-[![CI](https://github.com/atulpandey02/stock-market-data-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/atulpandey02/stock-market-data-pipeline/actions)
+[![CI](https://github.com/atulpandey02/stock-market-rag-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/atulpandey02/stock-market-data-pipeline/actions)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![Kafka](https://img.shields.io/badge/Apache_Kafka-231F20?style=flat-square&logo=apache-kafka&logoColor=white)](https://kafka.apache.org)
 [![Spark](https://img.shields.io/badge/Apache_Spark-E25A1C?style=flat-square&logo=apache-spark&logoColor=white)](https://spark.apache.org)
