@@ -18,7 +18,7 @@
 
 <br/>
 
-**9 Docker containers &nbsp;·&nbsp; 2 Airflow DAGs &nbsp;·&nbsp; 5 dbt models &nbsp;·&nbsp; 27 data quality tests &nbsp;·&nbsp; 300+ Pinecone chunks &nbsp;·&nbsp; 10 stocks tracked**
+**10 Docker containers &nbsp;·&nbsp; 2 Airflow DAGs &nbsp;·&nbsp; 5 dbt models &nbsp;·&nbsp; 27 data quality tests &nbsp;·&nbsp; 300+ Pinecone chunks &nbsp;·&nbsp; 10 stocks tracked**
 
 <br/>
 
@@ -44,7 +44,6 @@
 - [Key Engineering Decisions](#key-engineering-decisions)
 - [Lessons Learned](#lessons-learned)
 - [Getting Started](#getting-started)
-- [Resume Bullets](#resume-bullets)
 - [Future Enhancements](#future-enhancements)
 
 ---
@@ -447,34 +446,6 @@ dbt test --profiles-dir . --project-dir .
 cd src/rag
 python rag_pipeline.py     # fetches Finnhub news and loads into Pinecone (~2 min)
 streamlit run app.py       # opens dashboard at http://localhost:8501
-```
-
----
-
-## Resume Bullets
-
-```
-● Built Lambda architecture processing 10 stocks via dual Kafka topics —
-  batch pipeline ingesting 365 days of OHLCV history and a streaming
-  pipeline with 3-minute and 5-minute Spark windowed aggregations stored
-  in Snowflake.
-
-● Designed incremental Snowflake loading using MERGE with composite
-  primary keys (symbol + date) for idempotent reruns, alongside
-  Hive-style MinIO partitioning for Spark partition pruning.
-
-● Built dbt transformation layer with staging views and analytical marts
-  computing SMA-5, SMA-20, and BUY/SELL signals — backed by 27
-  automated data quality tests that fail the pipeline on bad data.
-
-● Developed RAG-powered market intelligence fetching Finnhub news,
-  embedding 300+ chunks using sentence-transformers stored in Pinecone,
-  and generating grounded answers via Groq Llama3 that explicitly flags
-  conflicts between quantitative signals and news sentiment.
-
-● Orchestrated via Airflow DAGs with a custom MinIODataSensor validating
-  data landing before Spark runs. CI/CD via GitHub Actions runs 5 jobs
-  including syntax checks, unit tests, and dbt parse on every push.
 ```
 
 ---
